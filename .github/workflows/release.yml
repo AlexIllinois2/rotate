@@ -27,11 +27,17 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # runner 镜像自带 Android SDK（ANDROID_SDK_ROOT 已设好），这里只补需要的包，
+      # 不走 android-actions/setup-android（它在 runner 上会失败）
       - name: Install SDK packages
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "SDK=$SDK"
+          SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then SDKMGR=$(command -v sdkmanager); fi
+          yes | "$SDKMGR" --licenses > /dev/null || true
+          "$SDKMGR" --install "platforms;android-36" "build-tools;36.0.0"
+          ls "$SDK/platforms" "$SDK/build-tools"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
