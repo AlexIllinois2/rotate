@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">旋转锁定</string>
+    <string name="service_label">旋转锁定</string>
+    <string name="service_summary">按应用自动锁定屏幕方向</string>
+    <string name="service_description">用于识别当前前台是哪个应用，从而在你打开指定应用时自动锁定屏幕方向，离开时还原。本服务不读取屏幕内容，不采集任何数据。</string>
+    <string name="warn_no_write_settings">无法修改系统旋转设置：请回到本应用重新授予「修改系统设置」</string>
+    <string name="warn_overlay_needs_android12">悬浮窗方式需要 Android 12 及以上，请把这个应用改成「系统设置」方式</string>
+    <string name="warn_no_overlay_permission">无法添加悬浮窗：请回到本应用授予「显示在其他应用上层」</string>
+</resources>
