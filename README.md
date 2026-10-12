@@ -93,3 +93,10 @@ gradle assembleRelease
 ## 文档
 
 - [`docs/notes.md`](docs/notes.md)：设计笔记 —— 三种方式的 AOSP 源码依据、踩过的坑（含真机复现过程与日志）、验证记录。
+
+## 许可
+
+[MIT](LICENSE)
+
+> 仓库里不含任何第三方二进制；`Shizuku` 只是可选的运行时依赖（`dev.rikka.shizuku:api`，Apache-2.0），
+> 由使用者自行安装其官方 APK。
