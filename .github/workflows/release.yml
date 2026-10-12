@@ -1,0 +1,64 @@
+name: Release
+
+# 打一个 v* 的 tag 就会自动构建并发布 APK。
+# 也可以在 Actions 页面手动触发（需要填 tag 名，例如 v1.0.0）。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'tag to publish (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      # 仓库里没有 gradle wrapper（本机用固定版本的 Gradle 目录构建），CI 用 setup-gradle 提供的 gradle
+      - name: Build release APK
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk out/AppRotate-release.apk
+          ls -l out
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/AppRotate-release.apk
+          generate_release_notes: true
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          body: |
+            旋转锁定 AppRotate —— 按应用锁定屏幕方向（Android 16 / API 36 目标机型）。
+
+            APK 由 GitHub Actions 在本仓库源码上构建（`gradle assembleRelease`），使用 Android 调试签名，
+            可直接侧载；若要覆盖安装本机构建的同名包，请先卸载或改用同一签名密钥重新构建。
+
+            三种锁定方式（按应用选择）：系统设置 / 悬浮窗 / Shizuku 强制。
+            权限、原理与已知限制见仓库 README。
