@@ -1,5 +1,27 @@
-.gradle
-.kotlin
-.kotlinx
-/app/build
+# Gradle / Android build output
+.gradle/
+.kotlin/
+build/
+*/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local machine configuration (contains the SDK path of whoever built it)
 local.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Build products: the APKs are attached to GitHub Releases instead of being committed
+dist/
+*.apk
+*.aab
+*.idsig
+*.keystore
+
+# OS noise
+Thumbs.db
+.DS_Store

@@ -21,7 +21,6 @@
 > **历史**：早期是"每个应用各选一种方式"。实践下来没有道理——同一次锁定里两套机制会互相打架
 > （覆盖层的固定方向和 `fixed-to-user-rotation` 会盖掉彼此），而且用户根本记不住"哪个应用用了哪种方式"。
 > 现在统一成一个开关，升级时自动把旧配置里用过的那种方式搬过来（`AppPrefs.engine` 的迁移分支）。
-
 > **工程位置**：`D:\dev\proj\kotlin\AppRotate`（构建/测试脚本在 `tools\`），硬锁方向测试 App 在 `D:\dev\proj\java\TestScreen`。`D:\dev\proj` 下按语言分目录。本文档与 APK 仍在本会话 `outputs\` 保留一份。
 
 ---
@@ -74,6 +73,7 @@ adb 位于 `D:\dev\android\sdk\platform-tools\adb.exe`。
 - **Shizuku**：只在选了「Shizuku 强制」时出现，状态会显示"未安装 / 未运行 / 未授权 / 已就绪"，
   卡片上直接有"去授权"，点进去还有"获取 Shizuku 授权 / 打开 Shizuku"两个按钮。
 
+
 已授权项显示"已完成"，从系统页面返回时状态会自动刷新。配置完成后不必再打开这个 App。
 
 ## 4. 日常使用
@@ -85,6 +85,7 @@ adb 位于 `D:\dev\android\sdk\platform-tools\adb.exe`。
   单个应用的对话框里只选方向，方式提示当前用的是哪种（要改回到「锁定方式」卡片）；
 - 「Shizuku 强制」四个方向加「保持进入时」都支持（走的是 `user_rotation` + `fixed-to-user-rotation`，
   不是那组只能表达竖屏/横屏的 compat 覆盖）；需要 Shizuku 正在运行并已授权本应用。
+
 - 点列表任意一行可改方向，点"移除"取消该应用的配置；
 - 顶部"**启用自动切换**"是总开关：关闭后不再锁定，并还原系统设置；
 - 底部"**立即还原系统旋转设置**"是急救按钮：万一方向没还原，点一下恢复。
@@ -630,7 +631,6 @@ top-most instance` 或 `its current task has been brought to the front`，然后
 - 安装要用 `--no-streaming`：流式/增量安装在软件模拟设备上会把 `system_server` 打崩（`Broken pipe` / `Can't find service: package`）；
 - "离开目标应用"要用 `KEYCODE_HOME` 或切到"设置"这类**另一个可启动应用**，别用 HOME *intent*（部分启动器不产生窗口状态事件），并先 `CLOSE_SYSTEM_DIALOGS` 关掉抢按键的 ANR 对话框；
 - `settings put` 之后要读回校验：设备繁忙时单次写入会静默失效（脚本里已加重试）。
-
 
 ---
 

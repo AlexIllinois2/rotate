@@ -60,7 +60,6 @@ Android 没有"按应用设置旋转方向"的公开 API，而"应用自己在�
 | 无障碍服务 | 只用来识别当前前台是哪个应用（配置里 `canRetrieveWindowContent=false`）；「全局旋转」的**自动档**靠它常驻来跑方向监听 |
 | 显示在其他应用上层（SYSTEM_ALERT_WINDOW） | 仅「悬浮窗」方式的 0×0 覆盖层窗口 |
 | 通知（Android 13+） | 仅「悬浮窗」方式锁定时通知栏的常驻提示 |
-
 界面上只会显示**当前锁定方式需要的那几项权限**，缺哪个就把对应的授权入口摆出来。
 | `<queries>` MAIN/LAUNCHER + HOME | 列出可启动应用、识别"回到桌面"（不用 QUERY_ALL_PACKAGES） |
 

@@ -361,7 +361,7 @@ try {
     Check 'P1b. overlay window is on screen (dumpsys)' 'True' (($w -match 'AppRotateOrientation').ToString())
     $fm = [regex]::Match($w, 'AppRotateOrientation[\s\S]{0,6000}?mFrame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
     if ($fm.Success) {
-        Write-Host ('  overlay frame = ' + $fm.Groups[3].Value + 'x' + $fm.Groups[4].Value + ' (1x1 expected; 0x0 曾在部分 ROM 上拿不到 surface 导致方向不生效)')
+        Write-Host ('  overlay frame = ' + $fm.Groups[3].Value + 'x' + $fm.Groups[4].Value + ' (1x1 expected)')
     }
     Hook '--ez overlayClear true'
     $clearedReport = WaitFor -TimeoutSec 60 -Interval 3 -Probe {
