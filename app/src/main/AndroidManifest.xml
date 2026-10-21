@@ -15,6 +15,14 @@
     <!-- 悬浮窗方式锁定期间在通知栏显示一条常驻提示（0×0 悬浮窗本身看不见，这是唯一的可见反馈） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 开机自启动：重启手机后按「开机自启动」开关恢复运行（界面开关控制，见 BootReceiver） -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- 后台守护：用前台服务（常驻通知）的方式提高进程优先级，被系统杀掉后自动重启 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ 起 specialUse 类型的前台服务要单独声明权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -46,6 +54,32 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 开机自启动：重启后按界面开关决定是否恢复运行。
+             exported=true 才能收到系统的隐式广播（BOOT_COMPLETED 是受保护广播，只有系统能发）。
+             MY_PACKAGE_REPLACED 覆盖应用更新后的场景；QUICKBOOT_POWERON 是部分厂商 ROM 的"快速开机"广播。 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 后台守护：常驻一条低优先级通知的前台服务。
+             锁定方向不属于媒体/定位等标准前台场景，用 specialUse 类型；Android 14+ 要求
+             在 <property> 里写明子类型用途，否则启动时系统会抛异常。 -->
+        <service
+            android:name=".RotationGuardService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the rotation lock process alive after boot and re-applies the global rotation mode" />
+        </service>
 
         <service
             android:name=".RotationAccessibilityService"

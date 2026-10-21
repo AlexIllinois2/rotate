@@ -84,6 +84,8 @@ fun AppRotateApp(refreshTick: Int) {
     var overlayGranted by remember { mutableStateOf(OverlayRotation.canDrawOverlay(context)) }
     var notificationsOn by remember { mutableStateOf(LockNotification.canPost(context)) }
     var accessibilityOn by remember { mutableStateOf(RotationAccessibilityService.isEnabled(context)) }
+    var autoStartOn by remember { mutableStateOf(AppPrefs.autoStart(context)) }
+    var guardOn by remember { mutableStateOf(AppPrefs.guardEnabled(context)) }
     var shizukuStatus by remember { mutableStateOf(ShizukuBridge.status(context)) }
     /** Shizuku 状态文案只在 refresh() 里算一次：放进 composable 体会每次重组都查一遍 Shizuku。 */
     var shizukuLabel by remember { mutableStateOf(ShizukuBridge.statusLabel(context)) }
@@ -101,6 +103,8 @@ fun AppRotateApp(refreshTick: Int) {
         overlayGranted = OverlayRotation.canDrawOverlay(context)
         notificationsOn = LockNotification.canPost(context)
         accessibilityOn = RotationAccessibilityService.isEnabled(context)
+        autoStartOn = AppPrefs.autoStart(context)
+        guardOn = AppPrefs.guardEnabled(context)
         shizukuStatus = ShizukuBridge.status(context)
         shizukuLabel = ShizukuBridge.statusLabel(context)
     }
@@ -289,6 +293,21 @@ fun AppRotateApp(refreshTick: Int) {
                     }
                 }
                 item {
+                    AutoStartCard(
+                        autoStart = autoStartOn,
+                        guard = guardOn,
+                        onAutoStartChange = { value ->
+                            AppPrefs.setAutoStart(context, value)
+                            autoStartOn = value
+                        },
+                        onGuardChange = { value ->
+                            AppPrefs.setGuardEnabled(context, value)
+                            guardOn = value
+                            if (value) RotationGuardService.start(context) else RotationGuardService.stop(context)
+                        },
+                    )
+                }
+                item {
                     Text(
                         text = "已配置的应用",
                         style = MaterialTheme.typography.titleMedium,
@@ -322,7 +341,7 @@ fun AppRotateApp(refreshTick: Int) {
                 item {
                     Text(
                         text = "原理：进入你指定的应用时锁定方向，离开后还原；锁定方式在上面统一选，按应用和全局共用同一种。" +
-                            "本应用不读取屏幕内容、不显示常驻通知（悬浮窗方式除外）、没有前台服务。\n" +
+                            "本应用不读取屏幕内容；常驻通知只出现在悬浮窗锁定期间、以及开启「后台守护」时。\n" +
                             "• 系统设置：改系统自动旋转与角度，离开时按进入前的状态精确还原，兼容性最好；" +
                             "掰不动自己在清单里锁死方向的应用（那时界面会提示你换方式）。\n" +
                             "• 悬浮窗：加一个看不见的 0×0 窗口来固定方向，完全不动系统设置；" +
@@ -451,6 +470,80 @@ private fun SwitchRow(title: String, desc: String, checked: Boolean, onChange: (
             Spacer(Modifier.width(12.dp))
             Switch(checked = checked, onCheckedChange = onChange)
         }
+    }
+}
+
+/**
+ * 开机自启动与后台守护：两个开关放在一张卡片里，共用一个说明头。
+ *
+ * 开机自启动 —— 重启手机后自动恢复运行（守护开着就连带拉起守护服务，并重放全局旋转档位）。
+ * 后台守护 —— 常驻一条低优先级通知的前台服务，提高进程优先级、被杀后自动重启、
+ *   并每隔一段时间替无障碍服务兜底自愈；它救不回被用户/ROM 关掉的无障碍服务，
+ *   只会在通知栏引导用户去打开（系统不允许应用自己打开无障碍服务）。
+ */
+@Composable
+private fun AutoStartCard(
+    autoStart: Boolean,
+    guard: Boolean,
+    onAutoStartChange: (Boolean) -> Unit,
+    onGuardChange: (Boolean) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(
+                text = "开机自启动与后台守护",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "重启手机后自动恢复运行，并在后台尽量保住进程，降低旋转锁定被系统杀掉的概率。" +
+                    "常驻通知只在开启「后台守护」后出现，点通知里的「退出守护」可随时关掉。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+            GuardSwitchRow(
+                title = "开机自启动",
+                desc = if (autoStart) {
+                    "重启后自动恢复：拉起后台守护并重放全局旋转档位（无障碍服务由系统自动重绑）"
+                } else {
+                    "重启手机后不会自动恢复，需要手动打开一次本应用"
+                },
+                checked = autoStart,
+                onChange = onAutoStartChange,
+            )
+            GuardSwitchRow(
+                title = "后台守护",
+                desc = if (guard) {
+                    "守护中：常驻一条低优先级通知，进程被系统杀掉后自动重启，并定期兜底全局档位"
+                } else {
+                    "已关闭：没有常驻通知，进程被系统杀掉后要等无障碍服务下次触发才恢复"
+                },
+                checked = guard,
+                onChange = onGuardChange,
+            )
+        }
+    }
+}
+
+/** [AutoStartCard] 里的单行开关（不套 Card，直接排在卡片内部）。 */
+@Composable
+private fun GuardSwitchRow(
+    title: String,
+    desc: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(desc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 

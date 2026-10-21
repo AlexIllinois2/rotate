@@ -173,6 +173,33 @@ object AppPrefs {
         sp(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
     }
 
+    // ---- 开机自启动 / 后台守护 ----
+    private const val KEY_AUTO_START = "auto_start"
+    private const val KEY_GUARD = "guard"
+
+    /**
+     * 开机自启动：重启手机后自动恢复运行（默认开）。
+     * 恢复的内容 = 后台守护服务（若开着）+ 重放全局旋转档位；
+     * 无障碍服务不用管：只要用户在系统设置里开着，系统每次开机都会自己重新绑定它。
+     */
+    fun autoStart(context: Context): Boolean = sp(context).getBoolean(KEY_AUTO_START, true)
+
+    fun setAutoStart(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_AUTO_START, value).apply()
+        journal(context, "setAutoStart " + value)
+    }
+
+    /**
+     * 后台守护：以前台服务（常驻一条低优先级通知）的方式提高进程优先级，
+     * 被系统杀掉后自动重启，并定期替无障碍服务兜底自愈全局档位（默认开）。
+     */
+    fun guardEnabled(context: Context): Boolean = sp(context).getBoolean(KEY_GUARD, true)
+
+    fun setGuardEnabled(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_GUARD, value).apply()
+        journal(context, "setGuard " + value)
+    }
+
     fun setTarget(context: Context, packageName: String, mode: OrientationMode) {
         val map = LinkedHashMap(config(context).targets)
         map[packageName] = mode

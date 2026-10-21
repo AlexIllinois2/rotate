@@ -7,7 +7,8 @@
 # 旋转锁定 AppRotate · 使用说明
 
 一个按应用自动锁定屏幕方向的小工具（目标机型：Android 16 / API 36）。
-没有前台服务、没有常驻通知、不联网、不读取屏幕内容。
+不联网、不读取屏幕内容；默认只有一个无障碍服务在系统需要时被绑定，另有两个默认开、可随时关掉的可选开关：
+「开机自启动」（重启手机后自动恢复运行）与「后台守护」（一条低优先级常驻通知的前台服务）。
 
 **锁定方式整个应用只有一处设置**（主界面顶部的「锁定方式」卡片，按应用锁定与全局旋转共用同一种）。
 同一套"识别前台应用 + 指定方向"的逻辑，三种落地方案：
@@ -110,7 +111,7 @@ adb 位于 `D:\dev\android\sdk\platform-tools\adb.exe`。
   - 系统设置 / Shizuku：关掉 `ACCELEROMETER_ROTATION`，按姿态写 `USER_ROTATION`
     （Shizuku 还额外打开 `wm fixed-to-user-rotation enabled`，所以连自带硬锁的应用也掰得动）；
   - 悬浮窗：**不动系统设置**，按姿态改覆盖层窗口的 `screenOrientation`。
-- **自动档需要无障碍服务常驻**：方向监听跑在无障碍服务里（本应用没有前台服务、没有常驻通知）。
+- **自动档需要无障碍服务常驻**：方向监听跑在无障碍服务里（开着「后台守护」时另有前台服务定期兜底自愈）。
   服务被省电策略关掉时，固定档仍然有效、自动档会停止跟随。
 - **权限跟着锁定方式走**：系统设置要「修改系统设置」、悬浮窗要「显示在其他应用上层」（+ Android 12+）、
   Shizuku 要 Shizuku 已启动并授权 —— 缺哪个，「全局旋转」卡片上就写哪句提示，对话框里也有对应的授权按钮。
@@ -125,12 +126,16 @@ adb 位于 `D:\dev\android\sdk\platform-tools\adb.exe`。
 | 修改系统设置（WRITE_SETTINGS） | 读写屏幕方向 / 自动旋转开关，没有别的办法 |
 | 无障碍服务 | 只用来识别"当前前台是哪个应用"。配置里 canRetrieveWindowContent=false，不读取屏幕内容 |
 | 显示在其他应用上层（SYSTEM_ALERT_WINDOW） | 只有"悬浮窗"方式需要：0×0 覆盖层窗口，用来向系统提交一个固定方向请求 |
-| 通知（POST_NOTIFICATIONS，Android 13+） | 只有"悬浮窗"方式需要：锁定时在通知栏常驻一条提示（0×0 窗口本身看不见，这是唯一的可见反馈） |
+| 通知（POST_NOTIFICATIONS，Android 13+） | "悬浮窗"方式锁定期间、以及开启「后台守护」时：在通知栏常驻一条提示（0×0 窗口本身看不见，这是唯一的可见反馈） |
+| 开机自启动（RECEIVE_BOOT_COMPLETED） | 只有「开机自启动」开关会用到：重启手机后自动恢复运行（BootReceiver） |
+| 前台服务（FOREGROUND_SERVICE / FOREGROUND_SERVICE_SPECIAL_USE） | 只有「后台守护」开关会用到：常驻通知的前台服务，提高进程优先级、被杀后自动重启（RotationGuardService） |
 | 声明式 queries（不用 QUERY_ALL_PACKAGES） | 列出桌面可启动应用供选择 |
 
 **Shizuku 不是本应用的权限**：它是你自己安装的独立应用，本应用只是通过它的 API 借用 shell 身份执行一次命令（`dev.rikka.shizuku:api`）。不装它就只是"Shizuku 强制"这一项不可用，其它两种方式完全不受影响。
 
-没有网络权限、没有通知、没有前台服务、没有自启广播。配置只存在本机 SharedPreferences。
+没有网络权限。配置只存在本机 SharedPreferences。
+开机自启动与后台守护都是**默认开、可随时在界面关掉**的可选功能（BootReceiver / RotationGuardService，见第 13 节）；
+两者都只是"恢复与保活"：无障碍服务本身由系统在开机后自动重绑，应用无权自己打开或关闭它。
 
 ## 6. 已知限制
 
@@ -191,7 +196,7 @@ adb 位于 `D:\dev\android\sdk\platform-tools\adb.exe`。
 
     adb shell dumpsys activity services | findstr rotatelock
 
-只应看到系统绑定的无障碍服务，没有前台服务、没有通知。
+只应看到系统绑定的无障碍服务（开着「后台守护」时另有一条 RotationGuardService 前台服务和它的常驻通知）。
 
 ## 8. 从源码重新构建
 
