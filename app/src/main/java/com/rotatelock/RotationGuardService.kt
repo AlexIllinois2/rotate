@@ -62,12 +62,20 @@ class RotationGuardService : android.app.Service() {
             return START_NOT_STICKY
         }
         runCatching { startAsForeground(currentWarn()) }
-        // 开机自启 / 进程重启后立刻重放全局档位（幂等；无障碍服务随后被重新绑定时还会再做一次）
+        // 开机自启 / 进程重启后立刻重放全局档位（幂等；无障碍服务随后被重新绑定时还会再做一次）。
+        // 正在为横屏活动让路时不重放：横屏活动要的是原生旋转行为，重放会把它压住。
         if (AppPrefs.globalMode(this).engages) {
-            AppPrefs.journal(this, "guard: replay global " + AppPrefs.globalMode(this).storedName)
-            GlobalRotation.apply(this)
+            if (AppPrefs.globalYielded(this)) {
+                AppPrefs.journal(this, "guard: replay skipped, yielded for landscape activity")
+            } else {
+                AppPrefs.journal(this, "guard: replay global " + AppPrefs.globalMode(this).storedName)
+                GlobalRotation.apply(this)
+            }
         }
         updateGuardNotification()
+        // Shizuku 方式的前台感知靠 ForegroundBus 的 UsageStats 轮询（守护服务开机就在，
+        // 是轮询最可靠的宿主；非 Shizuku 方式下 tick 会自行收摊）
+        ForegroundBus.startPolling(this)
         handler.removeCallbacks(tick)
         handler.postDelayed(tick, CHECK_INTERVAL_MS)
         // 被系统杀掉后重启服务（intent 为 null 也走上面这条正常路径）
@@ -85,8 +93,9 @@ class RotationGuardService : android.app.Service() {
     // ---- 定期兜底 ----
 
     private fun check() {
-        if (!RotationAccessibilityService.isEnabled(this)) {
-            // 被系统/厂商 ROM 关掉了：应用无权自己打开，通知栏引导用户去打开
+        if (!ForegroundBus.sourceAvailable(this)) {
+            // 前台来源不可用（无障碍被关 / Shizuku 方式缺「使用情况访问」权限）：
+            // 应用无权自己补上，通知栏引导用户去打开
             updateGuardNotification(warn = true)
             return
         }
@@ -97,7 +106,7 @@ class RotationGuardService : android.app.Service() {
         updateGuardNotification(warn = false)
     }
 
-    private fun currentWarn(): Boolean = !RotationAccessibilityService.isEnabled(this)
+    private fun currentWarn(): Boolean = !ForegroundBus.sourceAvailable(this)
 
     private fun updateGuardNotification(warn: Boolean = currentWarn()) {
         if (lastWarn == warn) return
@@ -127,9 +136,15 @@ class RotationGuardService : android.app.Service() {
             .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
         if (warn) {
-            builder.setContentText("无障碍服务被关闭了，旋转锁定不会生效")
-                .setContentIntent(openAccessibilityIntent())
-                .addAction(0, "去打开无障碍", openAccessibilityIntent())
+            if (AppPrefs.engine(this) == EngineKind.SHIZUKU) {
+                builder.setContentText("缺少「使用情况访问」权限，Shizuku 方式识别不到前台应用")
+                    .setContentIntent(openUsageAccessIntent())
+                    .addAction(0, "去授权", openUsageAccessIntent())
+            } else {
+                builder.setContentText("无障碍服务被关闭了，旋转锁定不会生效")
+                    .setContentIntent(openAccessibilityIntent())
+                    .addAction(0, "去打开无障碍", openAccessibilityIntent())
+            }
         } else {
             builder.setContentText("后台守护中：开机自动恢复，锁定被清理时自动补回")
                 .setContentIntent(openAppIntent())
@@ -149,6 +164,13 @@ class RotationGuardService : android.app.Service() {
         this,
         1,
         Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    private fun openUsageAccessIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        3,
+        Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 

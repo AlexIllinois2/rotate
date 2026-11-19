@@ -1,17 +1,47 @@
 package com.rotatelock
 
 import android.content.Context
+import android.view.Surface
 import org.json.JSONObject
 
 /**
- * 每个应用可选的方向模式。userRotation 即 Settings.System.USER_ROTATION 的取值。
+ * 每个应用可选的方向模式。userRotation 即 Settings.System.USER_ROTATION 的取值；
+ * 自动档不落固定角度，用负数编号与固定档区分（序列化/反序列化都走这个整数）。
  */
 enum class OrientationMode(val userRotation: Int, val label: String) {
     PORTRAIT(0, "锁定竖屏"),
     LANDSCAPE(1, "锁定横屏"),
     REVERSE_PORTRAIT(2, "锁定反向竖屏"),
     REVERSE_LANDSCAPE(3, "锁定反向横屏"),
-    KEEP_CURRENT(-1, "保持进入时的方向");
+    KEEP_CURRENT(-1, "保持进入时的方向"),
+    AUTO_PORTRAIT(-2, "竖屏自动（0°/180°）"),
+    AUTO_LANDSCAPE(-3, "横屏自动（90°/270°）"),
+    AUTO_270(-4, "自动（0°/90°/270°）"),
+    AUTO_360(-5, "全自动（0°/90°/180°/270°）");
+
+    /** 自动档允许落在哪些 Surface.ROTATION_*；null 表示这是固定档。 */
+    val allowedRotations: Set<Int>?
+        get() = when (this) {
+            AUTO_PORTRAIT -> setOf(Surface.ROTATION_0, Surface.ROTATION_180)
+            AUTO_LANDSCAPE -> setOf(Surface.ROTATION_90, Surface.ROTATION_270)
+            AUTO_270 -> setOf(Surface.ROTATION_0, Surface.ROTATION_90, Surface.ROTATION_270)
+            AUTO_360 -> setOf(
+                Surface.ROTATION_0,
+                Surface.ROTATION_90,
+                Surface.ROTATION_180,
+                Surface.ROTATION_270,
+            )
+            else -> null
+        }
+
+    val isAuto: Boolean get() = allowedRotations != null
+
+    /**
+     * 自动档的种子角度：当前角度在允许集合内就用它（避免锁定瞬间屏幕跳一下），
+     * 否则落到允许集合的第一个角度（竖屏轴是 0°，横屏轴是 90°）。
+     */
+    fun seedFor(current: Int): Int =
+        allowedRotations?.let { if (current in it) current else it.first() } ?: current
 
     companion object {
         fun from(value: Int): OrientationMode = entries.firstOrNull { it.userRotation == value } ?: PORTRAIT
@@ -95,6 +125,8 @@ object AppPrefs {
     private const val KEY_GLOBAL_BASE_USER = "global_base_user"
     /** 接管前的 `wm fixed-to-user-rotation`（Shizuku 方式用，default/enabled/disabled）。 */
     private const val KEY_GLOBAL_BASE_FIXED = "global_base_fixed"
+    /** 全局档位已为横屏活动让路（接管痕迹已暂时还原，heal/自动档不插手）。 */
+    private const val KEY_GLOBAL_YIELDED = "global_yielded"
 
     fun config(context: Context): RotationConfig {
         val store = sp(context)
@@ -245,6 +277,13 @@ object AppPrefs {
 
     fun setGlobalBaseFixed(context: Context, value: String) {
         sp(context).edit().putString(KEY_GLOBAL_BASE_FIXED, value).apply()
+    }
+
+    /** 全局档位当前是否在为横屏活动让路。 */
+    fun globalYielded(context: Context): Boolean = sp(context).getBoolean(KEY_GLOBAL_YIELDED, false)
+
+    fun setGlobalYielded(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_GLOBAL_YIELDED, value).apply()
     }
 
     /** 首次接管全局时记录用户原本的自动旋转开关与角度，供 release 精确还原。 */

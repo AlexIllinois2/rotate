@@ -172,6 +172,18 @@ object OverlayRotation {
             Surface.ROTATION_270 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
             else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
+        // 自动档不会直接落到窗口方向（调用方先转成种子角度的固定档）；
+        // 万一收到，按当前姿势在允许集合内的角度映射
+        OrientationMode.AUTO_PORTRAIT,
+        OrientationMode.AUTO_LANDSCAPE,
+        OrientationMode.AUTO_270,
+        OrientationMode.AUTO_360,
+        -> when (mode.seedFor(currentRotation(context))) {
+            Surface.ROTATION_90 -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            Surface.ROTATION_180 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+            Surface.ROTATION_270 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
     }
 
     private fun currentRotation(context: Context): Int = runCatching {

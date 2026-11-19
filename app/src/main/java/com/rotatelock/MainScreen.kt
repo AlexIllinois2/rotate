@@ -209,17 +209,41 @@ fun AppRotateApp(refreshTick: Int) {
                         )
                     }
                 }
-                item {
-                    StatusCard(
-                        title = "无障碍服务",
-                        desc = if (accessibilityOn) {
-                            "用于识别当前前台应用，不读取屏幕内容"
-                        } else {
-                            "被系统关掉了。系统不允许应用自己打开无障碍服务，点「去授权」在系统列表里重新打开即可"
-                        },
-                        granted = accessibilityOn,
-                        onGrant = { openAccessibilitySettings(context) },
-                    )
+                if (engine != EngineKind.SHIZUKU) {
+                    item {
+                        StatusCard(
+                            title = "无障碍服务",
+                            desc = if (accessibilityOn) {
+                                "用于识别当前前台应用，不读取屏幕内容"
+                            } else {
+                                "被系统关掉了。系统不允许应用自己打开无障碍服务，点「去授权」在系统列表里重新打开即可"
+                            },
+                            granted = accessibilityOn,
+                            onGrant = { openAccessibilitySettings(context) },
+                        )
+                    }
+                } else {
+                    item {
+                        StatusCard(
+                            title = "使用情况访问",
+                            desc = if (ForegroundBus.usageStatsGranted(context)) {
+                                "Shizuku 方式用它轮询识别当前前台应用（通常已由 Shizuku 自动授权）"
+                            } else {
+                                "缺这个权限 Shizuku 方式识别不到前台应用。正常会由 Shizuku 自动授权，" +
+                                    "没授上（比如 Shizuku 还没启动）时点「去授权」手动打开"
+                            },
+                            granted = ForegroundBus.usageStatsGranted(context),
+                            grantLabel = "去授权",
+                            onGrant = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
                 if (engine == EngineKind.OVERLAY) {
                     item {
@@ -261,32 +285,34 @@ fun AppRotateApp(refreshTick: Int) {
                         )
                     }
                 }
-                item {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                            Text(
-                                text = "保持无障碍服务运行",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                text = "厂商省电、游戏模式、上滑清理都可能把它关掉，而系统不允许应用自己把无障碍服务打开。" +
-                                    "下面两件事能明显降低被关掉的概率；万一还是被关了，本应用会直接告诉你。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                TextButton(onClick = { openBatterySettings(context) }, modifier = Modifier.weight(1f)) {
-                                    Text("关闭电池优化")
+                if (engine != EngineKind.SHIZUKU) {
+                    item {
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                Text(
+                                    text = "保持无障碍服务运行",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = "厂商省电、游戏模式、上滑清理都可能把它关掉，而系统不允许应用自己把无障碍服务打开。" +
+                                        "下面两件事能明显降低被关掉的概率；万一还是被关了，本应用会直接告诉你。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    TextButton(onClick = { openBatterySettings(context) }, modifier = Modifier.weight(1f)) {
+                                        Text("关闭电池优化")
+                                    }
+                                    TextButton(onClick = { openAppDetails(context) }, modifier = Modifier.weight(1f)) {
+                                        Text("自启动 / 后台白名单")
+                                    }
                                 }
-                                TextButton(onClick = { openAppDetails(context) }, modifier = Modifier.weight(1f)) {
-                                    Text("自启动 / 后台白名单")
-                                }
-                            }
-                            Row {
-                                TextButton(onClick = { openAccessibilitySettings(context) }) {
-                                    Text("去系统里检查无障碍开关")
+                                Row {
+                                    TextButton(onClick = { openAccessibilitySettings(context) }) {
+                                        Text("去系统里检查无障碍开关")
+                                    }
                                 }
                             }
                         }
@@ -642,10 +668,10 @@ private fun GlobalRotationCard(
                     )
                 }
             }
-            if (mode.isAuto && !accessibilityOn) {
+            if (mode.isAuto && !accessibilityOn && engine != EngineKind.SHIZUKU) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "自动档靠无障碍服务里的方向监听驱动：服务被关掉时就不会跟着转了",
+                    text = "自动档靠无障碍服务承载的方向监听驱动：服务被关掉时就不会跟着转了",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -894,6 +920,15 @@ private fun AppConfigDialog(
                         Spacer(Modifier.width(8.dp))
                         Text(item.label)
                     }
+                }
+                if (mode.isAuto) {
+                    Text(
+                        text = "自动档：屏幕在「" + mode.label + "」范围内跟重力感应翻转。" +
+                            "横屏应用/游戏选「横屏自动」即可在横屏与反向横屏间翻转。" +
+                            "「系统设置」方式下掰不动清单里锁死方向的应用，需要悬浮窗或 Shizuku 方式。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))

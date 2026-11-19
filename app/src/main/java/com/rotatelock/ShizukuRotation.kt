@@ -32,10 +32,11 @@ object ShizukuRotation {
             AppPrefs.journal(context, "shizuku live: not ready, skip")
             return false
         }
-        val rotation = if (mode == OrientationMode.KEEP_CURRENT) {
-            currentRotation(context)
-        } else {
-            mode.userRotation
+        val rotation = when {
+            mode == OrientationMode.KEEP_CURRENT -> currentRotation(context)
+            // 自动档：种子取当前实际角度（在允许集合内），不在就落到允许集合的基准角度
+            mode.isAuto -> mode.seedFor(currentRotation(context))
+            else -> mode.userRotation
         }
         val baseFixed = ShizukuBridge.fixedToUserRotation(context)
         AppPrefs.beginLock(context, packageName, rotation, EngineKind.SHIZUKU, baseFixed)

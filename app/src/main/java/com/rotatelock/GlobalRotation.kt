@@ -60,8 +60,8 @@ enum class GlobalRotationMode(
     ),
     AUTO_180(
         "auto_180",
-        "180° 自动（不含横向）",
-        "只在 0° 与 180° 之间自动切换；横着拿手机时保持竖屏不动。",
+        "180° 自动（跟随应用方向）",
+        "允许上下颠倒，轴跟着应用自身方向走：竖屏应用在竖屏与反向竖屏间翻转；应用自己转到横屏（全屏视频、横屏游戏）后，在横屏与反向横屏间翻转；横着拿不会把竖屏应用掰成横屏。",
         setOf(Surface.ROTATION_0, Surface.ROTATION_180),
         null,
     ),
@@ -101,6 +101,13 @@ enum class GlobalRotationMode(
     /** 自动档（需要方向传感器持续监听）。 */
     val isAuto: Boolean get() = allowedRotations != null
 
+    /**
+     * 「180° 自动」按应用自身方向定轴：允许集合不是固定的 0°/180°，而是跟随当前轴
+     * （竖屏轴 ↔ 横屏轴）动态切换。轴的来源有两种：应用自己把屏幕转到另一轴时从实际角度收养
+     * （系统设置方式），或前台应用的清单方向显式驱动（悬浮窗 / Shizuku 方式，见 GlobalRotation.setWatcherAxis）。
+     */
+    val followAppAxis: Boolean get() = this == AUTO_180
+
     companion object {
         fun from(value: String?): GlobalRotationMode =
             entries.firstOrNull { it.storedName == value } ?: FOLLOW_SYSTEM
@@ -127,6 +134,9 @@ object GlobalRotation {
     /** 当前档位是否在接管旋转。 */
     fun isEngaged(context: Context): Boolean = AppPrefs.globalMode(context).engages
 
+    /** 全局档位当前是否在为横屏活动让路（接管痕迹已暂时还原）。 */
+    fun isYielded(context: Context): Boolean = AppPrefs.globalYielded(context)
+
     /**
      * 切换档位并立刻生效。
      * @return true 表示已按新档位接管；切回「跟随系统」时返回还原是否成功。
@@ -142,6 +152,8 @@ object GlobalRotation {
      */
     fun apply(context: Context): Boolean {
         val mode = AppPrefs.globalMode(context)
+        // 重新接管即解除让路（resumeFromYield 也是走这里恢复）
+        if (AppPrefs.globalYielded(context)) AppPrefs.setGlobalYielded(context, false)
         if (!mode.engages) return false
         val engine = AppPrefs.engine(context)
         AppPrefs.journal(context, "global apply " + mode.storedName + " engine=" + engine.storedName)
@@ -237,6 +249,8 @@ object GlobalRotation {
     fun heal(context: Context) {
         val mode = AppPrefs.globalMode(context)
         if (!mode.engages) return
+        // 让路期间不插手：横屏活动要的是"原生旋转行为"，heal 会把让出去的状态抢回来
+        if (AppPrefs.globalYielded(context)) return
         when (AppPrefs.engine(context)) {
             EngineKind.SETTINGS -> {
                 if (!RotationController.canWrite(context)) return
@@ -273,6 +287,75 @@ object GlobalRotation {
 
     // ---- 三种落地方式 ----
 
+    /**
+     * 为横屏活动让路：前台活动自己请求了横屏（或全方向旋转）时，把全局档位暂时收掉，
+     * 让应用拿到它原生的旋转行为（横屏游戏、视频应用的全屏画面不再被压住）。
+     * 各通道按锁定方式各自还原痕迹；全局快照保留，等 [resumeFromYield] 或下次 [apply] 恢复接管。
+     * 自动档的方向监听在这里停掉，heal 在让路期间不插手。
+     */
+    fun yieldForLandscape(context: Context) {
+        if (AppPrefs.globalYielded(context)) return
+        if (!AppPrefs.globalMode(context).engages) return
+        AppPrefs.setGlobalYielded(context, true)
+        synchronized(LOCK) { watcher }?.stop()
+        when (AppPrefs.engine(context)) {
+            EngineKind.SETTINGS -> {
+                val baseAuto = AppPrefs.globalBaseAuto(context)
+                val baseUser = AppPrefs.globalBaseUser(context)
+                if (baseAuto >= 0 || baseUser >= 0) {
+                    restoreSettingsSnapshot(context, baseAuto, baseUser)
+                } else {
+                    // 没有快照（接管其实没落地过）：至少把自动旋转还回去
+                    putAuto(context, 1)
+                }
+            }
+
+            EngineKind.OVERLAY -> OverlayRotation.clear(context)
+
+            EngineKind.SHIZUKU -> {
+                if (!ShizukuRotation.isReady(context)) {
+                    AppPrefs.journal(context, "global yield: shizuku not ready, 痕迹未还原")
+                    return
+                }
+                val baseAuto = AppPrefs.globalBaseAuto(context)
+                val baseUser = AppPrefs.globalBaseUser(context)
+                val baseFixed = AppPrefs.globalBaseFixed(context)
+                val commands = ArrayList<String>()
+                commands.add("wm fixed-to-user-rotation " + (baseFixed ?: "default"))
+                commands.add("settings put system accelerometer_rotation " + if (baseAuto >= 0) baseAuto else 1)
+                if (baseUser >= 0) commands.add("settings put system user_rotation " + baseUser)
+                worker.execute {
+                    val result = ShizukuBridge.run(context, commands)
+                    AppPrefs.setLastResult(context, "global yield ok=" + result.ok)
+                    AppPrefs.journal(context, "global yield shizuku ok=" + result.ok)
+                }
+            }
+        }
+        AppPrefs.journal(
+            context,
+            "global yield for landscape activity engine=" + AppPrefs.engine(context).storedName,
+        )
+    }
+
+    /** 横屏活动结束（切到竖屏活动/桌面）：重新接管全局档位。 */
+    fun resumeFromYield(context: Context) {
+        if (!AppPrefs.globalYielded(context)) return
+        AppPrefs.journal(context, "global yield resume")
+        apply(context)
+    }
+
+    /**
+     * 「180° 自动（跟随应用方向）」的轴切换：由前台应用的清单方向驱动。
+     * 悬浮窗 / Shizuku 方式下应用自己的方向请求到不了显示层（覆盖层方向请求优先级最高 /
+     * fixed-to-user-rotation 让显示层忽略应用请求），轴只能由这里显式切换；
+     * 「系统设置」方式下方向监听会从实际角度自适应收养新轴，不需要外部驱动。
+     */
+    fun setWatcherAxis(context: Context, landscapeAxis: Boolean) {
+        if (AppPrefs.globalMode(context) != GlobalRotationMode.AUTO_180) return
+        if (AppPrefs.engine(context) == EngineKind.SETTINGS) return
+        synchronized(LOCK) { watcher }?.setLandscapeAxis(landscapeAxis)
+    }
+
     private fun applySettings(context: Context, mode: GlobalRotationMode): Boolean {
         if (!RotationController.canWrite(context)) {
             AppPrefs.journal(context, "global apply " + mode.storedName + ": no WRITE_SETTINGS")
@@ -285,9 +368,10 @@ object GlobalRotation {
 
         if (mode.isAuto) {
             val allowed = mode.allowedRotations.orEmpty()
-            val seed = seedRotation(context, allowed)
+            // 「跟随应用方向」的种子一律取当前实际角度（任何轴都合法），其余档位照旧纠正到允许集合
+            val seed = if (mode.followAppAxis) currentRotation(context) else seedRotation(context, allowed)
             putUser(context, seed)
-            watcher(context).start(allowed, seed) { commitRotation(context, it) }
+            watcher(context).start(allowed, seed, { commitRotation(context, it) }, mode.followAppAxis)
         } else {
             watcher(context).stop()
             mode.fixedRotation?.let { putUser(context, it) }
@@ -308,11 +392,11 @@ object GlobalRotation {
         val target: Int
         if (mode.isAuto) {
             val allowed = mode.allowedRotations.orEmpty()
-            val seed = seedRotation(context, allowed)
+            val seed = if (mode.followAppAxis) currentRotation(context) else seedRotation(context, allowed)
             target = seed
             if (!OverlayRotation.apply(context, OrientationMode.from(seed))) return false
             // 自动档 = 跟着姿态改窗口的方向请求，系统设置一下都不动
-            watcher(context).start(allowed, seed) { commitRotation(context, it) }
+            watcher(context).start(allowed, seed, { commitRotation(context, it) }, mode.followAppAxis)
         } else {
             watcher(context).stop()
             target = mode.fixedRotation ?: return false
@@ -330,10 +414,10 @@ object GlobalRotation {
             AppPrefs.setLastResult(context, "global shizuku apply failed: not ready")
             return false
         }
-        val seed = if (mode.isAuto) {
-            seedRotation(context, mode.allowedRotations.orEmpty())
-        } else {
-            mode.fixedRotation ?: Surface.ROTATION_0
+        val seed = when {
+            mode.followAppAxis -> currentRotation(context)
+            mode.isAuto -> seedRotation(context, mode.allowedRotations.orEmpty())
+            else -> mode.fixedRotation ?: Surface.ROTATION_0
         }
         worker.execute {
             // 快照要在动手前记：fixed-to-user-rotation 是显示级设置，不改回去整个屏幕会一直被固定住
@@ -354,7 +438,7 @@ object GlobalRotation {
             Log.i(TAG, "global shizuku apply ok=" + result.ok + " rot=" + seed)
         }
         if (mode.isAuto) {
-            watcher(context).start(mode.allowedRotations.orEmpty(), seed) { commitRotation(context, it) }
+            watcher(context).start(mode.allowedRotations.orEmpty(), seed, { commitRotation(context, it) }, mode.followAppAxis)
         } else {
             watcher(context).stop()
         }
@@ -366,7 +450,23 @@ object GlobalRotation {
      * @return 是否真的落地了（没落地的话监听器会保留候选，下次姿态变化再试）
      */
     private fun commitRotation(context: Context, rotation: Int): Boolean {
-        val ok = when (AppPrefs.engine(context)) {
+        val engine = AppPrefs.engine(context)
+        // 外来角度礼让：实际角度不在允许集合里，多半是应用自己把屏幕转过去了（全屏视频的横屏、
+        // 横屏游戏）。这时别跟它抢 user_rotation，等它自己转回来（角度回到允许集合）再继续跟姿态。
+        // 「跟随应用方向」不需要：允许集合本来就跟着实际角度所在的轴走（见 OrientationWatcher.syncAxisWithActual），
+        // 任何角度都在当前轴的允许集合里。
+        if (!AppPrefs.globalMode(context).followAppAxis) {
+            val allowed = AppPrefs.globalMode(context).allowedRotations
+            val actual = currentRotation(context)
+            if (allowed != null && actual !in allowed) {
+                AppPrefs.journal(
+                    context,
+                    "global auto defer: screen at " + actual + " (app request?), skip " + rotation,
+                )
+                return false
+            }
+        }
+        val ok = when (engine) {
             EngineKind.SETTINGS -> {
                 if (!RotationController.canWrite(context)) {
                     AppPrefs.journal(context, "global auto: no WRITE_SETTINGS")
@@ -407,6 +507,19 @@ object GlobalRotation {
     private fun seedRotation(context: Context, allowed: Set<Int>): Int {
         val current = currentRotation(context)
         return if (current in allowed) current else Surface.ROTATION_0
+    }
+
+    /**
+     * 按应用自动档与全局自动档共用同一个方向监听器（进程内单例）。
+     * 进入按应用时 pause 已把全局监听停掉，调用方拿到实例后用按应用的配置重启。
+     */
+    fun acquireWatcher(context: Context): OrientationWatcher = synchronized(LOCK) {
+        watcher ?: OrientationWatcher(context.applicationContext ?: context).also { watcher = it }
+    }
+
+    /** 停掉方向监听（按应用锁离开时调用；全局仍在接管时由 release 流程里的 apply 重新拉起）。 */
+    fun stopWatcher(context: Context) {
+        synchronized(LOCK) { watcher }?.stop()
     }
 
     private fun watcher(context: Context): OrientationWatcher = synchronized(LOCK) {

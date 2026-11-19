@@ -18,6 +18,12 @@
     <!-- 开机自启动：重启手机后按「开机自启动」开关恢复运行（界面开关控制，见 BootReceiver） -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Shizuku 方式的前台感知：UsageStats 轮询需要「使用情况访问」权限。
+         这是 AppOps 型权限，可由 Shizuku（shell 身份）pm grant 自动授予，用户无感。 -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- 后台守护：用前台服务（常驻通知）的方式提高进程优先级，被系统杀掉后自动重启 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Android 14+ 起 specialUse 类型的前台服务要单独声明权限 -->

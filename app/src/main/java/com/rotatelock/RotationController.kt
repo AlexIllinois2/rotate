@@ -19,6 +19,13 @@ object RotationController {
     fun userRotation(context: Context): Int =
         Settings.System.getInt(context.contentResolver, Settings.System.USER_ROTATION, Surface.ROTATION_0)
 
+    /** 直接写 USER_ROTATION：按应用自动档跟姿态用（快照的记录与还原由 lock/restore 负责）。 */
+    fun putUserRotation(context: Context, value: Int) {
+        runCatching {
+            Settings.System.putInt(context.contentResolver, Settings.System.USER_ROTATION, value)
+        }
+    }
+
     /** 系统当前是否已经处于"锁定到 rotation"的状态（自愈判断用）。 */
     fun isLockedTo(context: Context, rotation: Int): Boolean =
         autoRotate(context) == 0 && userRotation(context) == rotation
@@ -117,6 +124,8 @@ object RotationController {
     fun switchEngine(context: Context, kind: EngineKind) {
         AppPrefs.setEngine(context, kind)
         resetAll(context)
+        // 切到 Shizuku 方式后前台感知改走 UsageStats 轮询（顺带静默补授权）；其他方式 tick 会自行收摊
+        ForegroundBus.startPolling(context)
     }
 
     /** 按应用锁定清干净后补回全局档位（上面收覆盖层时会顺带把全局那个一起收掉）。 */

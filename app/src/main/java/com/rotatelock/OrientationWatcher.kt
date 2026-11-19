@@ -2,9 +2,11 @@ package com.rotatelock
 
 import android.content.Context
 import android.hardware.SensorManager
+import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Display
 import android.view.OrientationEventListener
 import android.view.Surface
 
@@ -32,6 +34,16 @@ class OrientationWatcher(private val appContext: Context) {
 
     /** 允许落在哪些 Surface.ROTATION_*。 */
     private var allowed: Set<Int> = ALL_ROTATIONS
+
+    /**
+     * 「跟随应用方向」模式（180° 自动）：true 时允许集合不取 [allowed] 固定集合，
+     * 而是取当前轴的两个方向（竖屏轴 0°/180° 或横屏轴 90°/270°），
+     * 并从实际显示角度自适应收养跨轴变化（应用自己转到横屏/转回来）。
+     */
+    private var followAxis: Boolean = false
+
+    /** 当前轴是否为横屏轴（followAxis 模式下决定允许集合）。 */
+    private var landscapeAxis: Boolean = false
 
     /** 最近一次真正写进系统设置的角度。 */
     private var applied: Int = Surface.ROTATION_0
@@ -64,15 +76,40 @@ class OrientationWatcher(private val appContext: Context) {
     fun isRunning(): Boolean = listener != null
 
     /**
-     * @param allowedRotations 自动档允许落在哪些角度
+     * @param allowedRotations 自动档允许落在哪些角度（followAppAxis 时只是初始参考，实际集合跟随当前轴）
      * @param seed 起始角度（应当是当前的真实角度，或当前角度不被允许时的兜底角度）
+     * @param followAppAxis true = 「跟随应用方向」：允许集合跟随当前轴，并从实际角度收养跨轴变化
      */
-    fun start(allowedRotations: Set<Int>, seed: Int, onApplied: ((Int) -> Boolean)? = null) {
+    fun start(
+        allowedRotations: Set<Int>,
+        seed: Int,
+        onApplied: ((Int) -> Boolean)? = null,
+        followAppAxis: Boolean = false,
+    ) {
         generation++
         val gen = generation
         allowed = allowedRotations
+        followAxis = followAppAxis
+        // 「跟随应用方向」的轴来源是前台变化（无障碍事件或 Shizuku 方式的 UsageStats 轮询）。
+        // 前台来源不可用时绝不能从种子角度收养横屏轴：否则一次残留的横屏角度（比如重启前
+        // 按应用锁留下的 user_rotation=90）会把整个系统锁进横屏翻转且无法恢复。
+        val eventsAvailable = ForegroundBus.sourceAvailable(appContext)
+        if (followAxis && !eventsAvailable &&
+            (seed == Surface.ROTATION_90 || seed == Surface.ROTATION_270)
+        ) {
+            AppPrefs.journal(
+                appContext,
+                "global watcher: accessibility off, keep portrait axis (seed=" + seed + ")",
+            )
+        }
+        landscapeAxis = followAxis && eventsAvailable &&
+            (seed == Surface.ROTATION_90 || seed == Surface.ROTATION_270)
         this.onApplied = onApplied
-        applied = if (seed in allowedRotations) seed else fallbackRotation(allowedRotations)
+        applied = if (followAxis) {
+            seed // 跟随应用方向：当前实际角度就是轴的种子，不必落在 allowedRotations 里
+        } else {
+            if (seed in allowedRotations) seed else fallbackRotation(allowedRotations)
+        }
         clearCandidate()
 
         // 构造和 enable 都在主线程 post 里做：OrientationEventListener 的回调跑在注册时的
@@ -109,8 +146,52 @@ class OrientationWatcher(private val appContext: Context) {
         }
     }
 
+    /**
+     * 「跟随应用方向」模式下由前台应用的清单方向驱动轴切换（悬浮窗 / Shizuku 方式用：
+     * 这两种方式下应用自己的方向请求到不了显示层，实际角度自适应看不到跨轴变化）。
+     * applied 留在旧轴上没关系：新轴的任何姿态样本都会因 nearest != applied 触发提交。
+     */
+    fun setLandscapeAxis(landscape: Boolean) {
+        if (!followAxis || landscapeAxis == landscape) return
+        landscapeAxis = landscape
+        clearCandidate()
+        Log.i(TAG, "global watcher axis -> " + (if (landscape) "landscape" else "portrait"))
+        AppPrefs.journal(appContext, "global watcher axis -> " + (if (landscape) "landscape" else "portrait"))
+    }
+
+    /** 当前生效的允许集合：固定集合模式取 [allowed]，「跟随应用方向」取当前轴的两个方向。 */
+    private fun effectiveAllowed(): Set<Int> = when {
+        !followAxis -> allowed
+        landscapeAxis -> LANDSCAPE_AXIS
+        else -> PORTRAIT_AXIS
+    }
+
+    /**
+     * 「跟随应用方向」的轴自适应：应用自己把屏幕转到另一个轴（全屏视频、横屏游戏）时收养新轴，
+     * 应用转回来时同样收养。我们自己写的角度永远在当前轴内，不会误触发。
+     *
+     * 只在「系统设置」方式下生效：只有那种方式显示层才跟着应用的方向请求走，跨轴变化才观察得到。
+     * 悬浮窗 / Shizuku 方式下实际角度永远跟着我们的写入走（覆盖层方向请求优先级最高 /
+     * fixed-to-user-rotation 让显示层忽略应用请求），如果在这里收养，会把外部设好的轴
+     * （GlobalRotation.setWatcherAxis）在下一次传感器事件时就改回去——横屏锁定应用翻转失效就是它。
+     */
+    private fun syncAxisWithActual() {
+        if (!followAxis) return
+        if (AppPrefs.engine(appContext) != EngineKind.SETTINGS) return
+        val actual = currentRotation()
+        val actualLandscape = actual == Surface.ROTATION_90 || actual == Surface.ROTATION_270
+        if (actualLandscape == landscapeAxis) return
+        landscapeAxis = actualLandscape
+        applied = actual
+        clearCandidate()
+        AppPrefs.journal(appContext, "global watcher axis adopted -> " + actual)
+        Log.i(TAG, "global watcher axis adopted -> " + actual)
+    }
+
     /** 不允许的角度上一律保持原状：这才是"不可上下颠倒""不含横向"想要的行为。 */
     private fun handle(orientation: Int) {
+        syncAxisWithActual()
+        val allowedNow = effectiveAllowed()
         if (DEBUG_LOG) {
             // 只在"算出来的角度变了"时打，否则 15Hz 的传感器会把 logcat 刷爆
             val nearest = if (orientation >= 0) surfaceRotation(orientation) else -1
@@ -119,7 +200,7 @@ class OrientationWatcher(private val appContext: Context) {
                 Log.i(
                     TAG,
                     "sensor orientation=" + orientation + " -> rotation=" + nearest +
-                        " applied=" + applied + " allowed=" + allowed,
+                        " applied=" + applied + " allowed=" + allowedNow,
                 )
             }
         }
@@ -128,7 +209,7 @@ class OrientationWatcher(private val appContext: Context) {
             return
         }
         val nearest = surfaceRotation(orientation)
-        if (nearest == applied || nearest !in allowed) {
+        if (nearest == applied || nearest !in allowedNow) {
             clearCandidate()
             return
         }
@@ -144,7 +225,7 @@ class OrientationWatcher(private val appContext: Context) {
         val target = candidate
         candidate = -1
         if (target < 0) return
-        if (target != applied && target in allowed) commit(target)
+        if (target != applied && target in effectiveAllowed()) commit(target)
     }
 
     private fun clearCandidate() {
@@ -193,6 +274,12 @@ class OrientationWatcher(private val appContext: Context) {
             allowedRotations.firstOrNull() ?: Surface.ROTATION_0
         }
 
+    private fun currentRotation(): Int = runCatching {
+        appContext.getSystemService(DisplayManager::class.java)
+            .getDisplay(Display.DEFAULT_DISPLAY)
+            .rotation
+    }.getOrDefault(Surface.ROTATION_0)
+
     private companion object {
         const val TAG = "RotationLock"
         /** 传感器事件很密（15Hz 左右），只在 debug 包里逐条打，方便排查"到底有没有收到事件"。 */
@@ -204,5 +291,9 @@ class OrientationWatcher(private val appContext: Context) {
             Surface.ROTATION_180,
             Surface.ROTATION_270,
         )
+
+        /** 「跟随应用方向」的两个轴：竖屏轴（0°/180°）与横屏轴（90°/270°）。 */
+        val PORTRAIT_AXIS = setOf(Surface.ROTATION_0, Surface.ROTATION_180)
+        val LANDSCAPE_AXIS = setOf(Surface.ROTATION_90, Surface.ROTATION_270)
     }
 }
