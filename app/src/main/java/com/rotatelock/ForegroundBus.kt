@@ -154,6 +154,22 @@ object ForegroundBus {
         else -> RotationAccessibilityService.isEnabled(context)
     }
 
+    /** 最近一次派发的前台 (包名, 组件名)；还没有任何前台信息时为 null。 */
+    fun currentForeground(): Pair<String, String?>? = lastDispatched
+
+    /**
+     * 当前前台应用的清单方向是否属于横屏/全方向族（横屏游戏、视频全屏……）。
+     * 前台信息缺失、不是可启动应用（桌面除外）或查不到组件时按"不要横屏"处理。
+     * 给「跟随应用方向」的播种用：轴跟着前台应用走，而不是跟着屏幕残留角度走。
+     */
+    fun foregroundWantsLandscape(context: Context): Boolean {
+        val foreground = lastDispatched ?: return false
+        val (pkg, cls) = foreground
+        if (pkg !in AppCatalog.launchable(context)) return false
+        if (cls.isNullOrEmpty()) return false
+        return ActivityOrientation.requestsFreeRotation(context, pkg, cls) ?: false
+    }
+
     // ---- 派发 ----
 
     /** 统一入口：任何来源感知到前台变化都走这里。 */

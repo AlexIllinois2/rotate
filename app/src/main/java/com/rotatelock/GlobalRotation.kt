@@ -356,6 +356,27 @@ object GlobalRotation {
         synchronized(LOCK) { watcher }?.setLandscapeAxis(landscapeAxis)
     }
 
+    /**
+     * 「跟随应用方向」的种子角度：以前台应用的清单方向定轴，而不是盲目采用当前实际角度。
+     * 横屏应用（视频全屏、横屏游戏）刚退到后台时屏幕往往还停在横屏——这时前台已经是
+     * 桌面/竖屏应用了，盲目采当前角度会把轴错误地收养在横屏轴上，竖屏前台被锁在
+     * 横屏轴里（表现为回桌面仍是横屏，要转一下手机才恢复）。前台信息还没建立时
+     * （刚开机等）退回"按当前角度收养"的旧行为。
+     */
+    private fun followAxisSeed(context: Context): Int {
+        val current = currentRotation(context)
+        val currentIsLandscape = current == Surface.ROTATION_90 || current == Surface.ROTATION_270
+        val landscapeAxis = if (ForegroundBus.currentForeground() == null) {
+            currentIsLandscape
+        } else {
+            ForegroundBus.foregroundWantsLandscape(context)
+        }
+        return when {
+            landscapeAxis -> if (currentIsLandscape) current else Surface.ROTATION_90
+            else -> if (currentIsLandscape) Surface.ROTATION_0 else current
+        }
+    }
+
     private fun applySettings(context: Context, mode: GlobalRotationMode): Boolean {
         if (!RotationController.canWrite(context)) {
             AppPrefs.journal(context, "global apply " + mode.storedName + ": no WRITE_SETTINGS")
@@ -368,8 +389,8 @@ object GlobalRotation {
 
         if (mode.isAuto) {
             val allowed = mode.allowedRotations.orEmpty()
-            // 「跟随应用方向」的种子一律取当前实际角度（任何轴都合法），其余档位照旧纠正到允许集合
-            val seed = if (mode.followAppAxis) currentRotation(context) else seedRotation(context, allowed)
+            // 「跟随应用方向」的种子按前台应用方向定轴（防残留角度误导轴），其余档位照旧纠正到允许集合
+            val seed = if (mode.followAppAxis) followAxisSeed(context) else seedRotation(context, allowed)
             putUser(context, seed)
             watcher(context).start(allowed, seed, { commitRotation(context, it) }, mode.followAppAxis)
         } else {
@@ -392,7 +413,7 @@ object GlobalRotation {
         val target: Int
         if (mode.isAuto) {
             val allowed = mode.allowedRotations.orEmpty()
-            val seed = if (mode.followAppAxis) currentRotation(context) else seedRotation(context, allowed)
+            val seed = if (mode.followAppAxis) followAxisSeed(context) else seedRotation(context, allowed)
             target = seed
             if (!OverlayRotation.apply(context, OrientationMode.from(seed))) return false
             // 自动档 = 跟着姿态改窗口的方向请求，系统设置一下都不动
@@ -415,7 +436,7 @@ object GlobalRotation {
             return false
         }
         val seed = when {
-            mode.followAppAxis -> currentRotation(context)
+            mode.followAppAxis -> followAxisSeed(context)
             mode.isAuto -> seedRotation(context, mode.allowedRotations.orEmpty())
             else -> mode.fixedRotation ?: Surface.ROTATION_0
         }

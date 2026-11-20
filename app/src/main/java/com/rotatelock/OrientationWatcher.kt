@@ -54,6 +54,9 @@ class OrientationWatcher(private val appContext: Context) {
     /** 上一次打过日志的角度，用于只在变化时打印。 */
     private var lastLoggedNearest: Int = -1
 
+    /** 最后一次传感器报的姿态（原始 orientation 值；平放时常为 ORIENTATION_UNKNOWN）。 */
+    private var lastOrientation: Int = OrientationEventListener.ORIENTATION_UNKNOWN
+
     /** 到点确认候选角度（防抖：抖动会被下一个样本取消掉）。 */
     private val confirmRunnable = Runnable { confirmPending() }
 
@@ -132,6 +135,9 @@ class OrientationWatcher(private val appContext: Context) {
             runCatching { created.enable() }
                 .onFailure { AppPrefs.journal(appContext, "global watcher enable failed: " + it) }
             Log.i(TAG, "global watcher enabled allowed=" + allowed + " seed=" + applied)
+            // 启动时补一次重估：接管那一刻的 applied 可能还挂在跨轴的旧角度上
+            //（横屏应用刚退后台就重新接管），不等第一帧传感器事件就纠正回来
+            reevaluate()
         }
     }
 
@@ -157,6 +163,28 @@ class OrientationWatcher(private val appContext: Context) {
         clearCandidate()
         Log.i(TAG, "global watcher axis -> " + (if (landscape) "landscape" else "portrait"))
         AppPrefs.journal(appContext, "global watcher axis -> " + (if (landscape) "landscape" else "portrait"))
+        main.post { reevaluate() }
+    }
+
+    /**
+     * 立即按"最后一次已知姿态 + 当前允许集合"重估一次落角。
+     *
+     * OrientationEventListener 只在姿态变化时回调——横屏应用（视频全屏）在前台时人往往
+     * 竖着握或平放，应用退后台、轴切回竖屏的那一刻没有新的传感器事件，
+     * applied 还挂在旧轴的角度上，屏幕就会一直停在横屏，直到用户 physically 转一下手机。
+     * 所以轴切换 / 监听启动后必须主动补一次：
+     *  - 有缓存姿态：照常走 handle 的候选-确认-提交流程；
+     *  - 姿态未知（平放）：直接落到轴的基准角度（竖屏轴 0° / 横屏轴 90°），
+     *    下一帧真实姿态事件来了会继续正常跟随。
+     */
+    private fun reevaluate() {
+        val allowedNow = effectiveAllowed()
+        if (lastOrientation != OrientationEventListener.ORIENTATION_UNKNOWN) {
+            handle(lastOrientation)
+            return
+        }
+        val base = fallbackRotation(allowedNow)
+        if (base != applied && base in allowedNow) commit(base)
     }
 
     /** 当前生效的允许集合：固定集合模式取 [allowed]，「跟随应用方向」取当前轴的两个方向。 */
@@ -190,6 +218,7 @@ class OrientationWatcher(private val appContext: Context) {
 
     /** 不允许的角度上一律保持原状：这才是"不可上下颠倒""不含横向"想要的行为。 */
     private fun handle(orientation: Int) {
+        lastOrientation = orientation
         syncAxisWithActual()
         val allowedNow = effectiveAllowed()
         if (DEBUG_LOG) {
